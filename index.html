@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <title>North Shore Trails</title>
+  <meta name="description" content="Plan, preview in 3D, download and track runs and hikes on Vancouver's North Shore mountains — works offline." />
+  <meta name="theme-color" content="#1f3a2c" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="NS Trails" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="vendor/maplibre-gl.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div id="map" aria-label="Map"></div>
+
+  <header class="topbar">
+    <div class="brand" title="North Shore Trails">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M2 20 9 7l4 7 2-3 7 9z" fill="currentColor"/></svg>
+    </div>
+    <div class="search">
+      <input id="search" type="search" placeholder="Search trails, peaks, places" autocomplete="off" enterkeyhint="search" aria-label="Search" />
+      <ul id="search-results" class="search-results" hidden></ul>
+    </div>
+    <span id="net-status" class="net-pill" hidden>Offline</span>
+  </header>
+
+  <!-- Shown while adding points: makes the mode obvious and gives a clear exit. -->
+  <div id="add-banner" class="add-banner" hidden>
+    <span id="add-banner-text">Tap a trail to add a point</span>
+    <button id="banner-undo" class="chip-btn" title="Undo (Ctrl+Z)">↶ Undo</button>
+    <button id="banner-done" class="chip-btn strong" title="Done (Esc)">Done</button>
+  </div>
+
+  <div class="fabs">
+    <button id="btn-locate" class="fab" title="My location" aria-label="My location">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+    </button>
+    <button id="btn-3d" class="fab" title="3D terrain" aria-label="3D terrain"><span class="fab-text">3D</span></button>
+    <button id="btn-layers" class="fab" title="Map layers" aria-label="Map layers">
+      <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z" fill="currentColor"/><path d="m3 13 9 5 9-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="btn-north" class="fab" title="Reset north" aria-label="Reset north">
+      <svg id="compass" viewBox="0 0 24 24"><path d="M12 3 16 12h-8z" fill="#e4572e"/><path d="M12 21 8 12h8z" fill="currentColor"/></svg>
+    </button>
+  </div>
+
+  <div id="layers-panel" class="popover" hidden>
+    <h3>Map layers</h3>
+    <label><input type="checkbox" data-layer="sat" /> Satellite</label>
+    <label><input type="checkbox" data-layer="contour" checked /> Contour lines</label>
+    <label><input type="checkbox" data-layer="hillshade" checked /> Hillshade</label>
+    <label><input type="checkbox" data-layer="trails" checked /> Trails</label>
+    <div class="legend">
+      <span><i style="background:#3b7d2b"></i>Easy (T1)</span>
+      <span><i style="background:#1f63c6"></i>Moderate (T2)</span>
+      <span><i style="background:#c62828"></i>Difficult (T3)</span>
+      <span><i style="background:#222"></i>Alpine (T4+)</span>
+      <span><i style="background:#8b4a2b"></i>Not rated</span>
+    </div>
+  </div>
+
+  <section id="sheet" class="sheet" data-size="half">
+    <div class="sheet-handle" id="sheet-handle" title="Drag to resize"><span></span></div>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="plan" aria-selected="true">Plan</button>
+      <button role="tab" data-tab="routes">Routes</button>
+      <button role="tab" data-tab="track">Track</button>
+      <button role="tab" data-tab="offline">Offline</button>
+    </nav>
+
+    <div class="panes">
+      <!-- PLAN -->
+      <div class="pane" data-pane="plan">
+        <div id="plan-empty" class="empty-state">
+          <button id="btn-new" class="btn primary big">＋ New route</button>
+          <p>Tap trail lines on the map to build a route. Distance, climb and time update as you go.</p>
+          <p class="muted">Or <a href="#" id="link-hikes">start from a popular hike</a>.</p>
+        </div>
+
+        <div id="plan-edit" hidden>
+          <input id="route-name" class="title-input" placeholder="Untitled route" aria-label="Route name" maxlength="80" />
+          <div class="stats">
+            <div><b id="st-dist">–</b><span>Distance</span></div>
+            <div><b id="st-gain">–</b><span>Climb</span></div>
+            <div><b id="st-time">–</b><span id="st-time-label">Time</span></div>
+          </div>
+          <p class="substats"><span id="st-loss">–</span><span class="sep"> · </span><span id="st-range">–</span><span class="sep"> · </span><button id="btn-pace" class="linklike" aria-expanded="false">Time based on <b id="pace-summary">hiking</b> ▾</button></p>
+          <div id="pace-row" class="pace-row" hidden>
+            <div class="seg2" role="radiogroup" aria-label="Activity">
+              <button data-mode="hike" role="radio">Hike</button>
+              <button data-mode="run" role="radio">Run</button>
+            </div>
+            <label data-for="run">Flat pace <input id="run-pace" type="text" value="6:00" inputmode="numeric" size="5" /> min/km</label>
+            <label data-for="hike">Speed
+              <select id="hike-factor">
+                <option value="0.8">Fast</option>
+                <option value="1" selected>Average</option>
+                <option value="1.25">Relaxed</option>
+              </select></label>
+          </div>
+          <canvas id="profile" class="profile" aria-label="Elevation profile"></canvas>
+          <p id="route-via" class="via"></p>
+
+          <div class="toolbar">
+            <button id="btn-add" class="tool" aria-pressed="false">＋ Add points</button>
+            <button id="btn-undo" class="tool" title="Undo (Ctrl+Z)">↶ Undo</button>
+            <button id="btn-outback" class="tool" title="Return the same way">↩ Out &amp; back</button>
+            <button id="btn-more" class="tool" title="More" aria-label="More actions">⋯</button>
+          </div>
+          <div id="more-menu" class="menu" hidden>
+            <button data-act="loop">⟳ Close loop back to start</button>
+            <button data-act="reverse">⇄ Reverse direction</button>
+            <label class="menu-check"><input id="snap" type="checkbox" checked /> Follow trails (turn off to draw freehand)</label>
+            <button data-act="import">Import GPX file…</button>
+            <button data-act="export">Export as GPX</button>
+            <button data-act="clear" class="danger">Discard this route</button>
+          </div>
+
+          <div class="actions">
+            <button id="btn-save" class="btn primary">Save</button>
+            <button id="btn-fly" class="btn">▶ 3D preview</button>
+            <button id="btn-dl-route" class="btn" title="Save map tiles around this route for use without signal">Save offline</button>
+          </div>
+          <p id="save-status" class="muted small"></p>
+        </div>
+        <input id="gpx-file" type="file" accept=".gpx,application/gpx+xml" hidden />
+      </div>
+
+      <!-- ROUTES -->
+      <div class="pane" data-pane="routes" hidden>
+        <div class="section-head"><h4>My routes</h4><button id="btn-sync" class="linklike small" title="Check for routes saved on other devices">↻ Refresh</button></div>
+        <p id="sync-line" class="muted small"></p>
+        <ul id="saved-routes" class="list"></ul>
+        <h4>Popular North Shore hikes</h4>
+        <div class="chips" id="hike-filters"></div>
+        <ul id="hike-list" class="cards"></ul>
+        <p class="fineprint">Typical figures; check trail conditions and closures before you go.</p>
+      </div>
+
+      <!-- TRACK -->
+      <div class="pane" data-pane="track" hidden>
+        <div class="gps-line"><span id="gps-dot" class="dot"></span><span id="gps-status">GPS starts when you record or tap ◎</span></div>
+        <div class="big-stats">
+          <div><b id="tk-time">0:00:00</b><span>Moving time</span></div>
+          <div><b id="tk-dist">0 m</b><span>Distance</span></div>
+          <div><b id="tk-gain">0 m</b><span>Climbed</span></div>
+          <div><b id="tk-pace">–</b><span>Avg pace</span></div>
+          <div><b id="tk-speed">–</b><span>Current pace</span></div>
+          <div><b id="tk-alt">–</b><span>Altitude</span></div>
+        </div>
+        <div id="follow-box" class="follow-box" hidden>
+          <div><b id="fl-left">–</b><span>Left on route</span></div>
+          <div><b id="fl-climb">–</b><span>Climb left</span></div>
+          <div><b id="fl-eta">–</b><span>Est. time left</span></div>
+          <div id="fl-off" class="off-route" hidden>⚠ Off route by <b id="fl-offd"></b></div>
+        </div>
+        <div class="actions">
+          <button id="btn-rec" class="btn primary big">● Start recording</button>
+          <button id="btn-pause" class="btn big" hidden>Pause</button>
+          <button id="btn-stop" class="btn danger big" hidden>Finish</button>
+        </div>
+        <label class="toggle"><input id="follow-me" type="checkbox" checked /> Keep map centred on me</label>
+        <p class="fineprint">GPS works without cell signal. Save the area for offline first (Offline tab). On iPhone keep the app open — iOS pauses web apps when the screen locks, so the screen stays on while recording.</p>
+        <h4>Recorded tracks</h4>
+        <ul id="saved-tracks" class="list"><li class="empty">No tracks yet.</li></ul>
+      </div>
+
+      <!-- OFFLINE & SYNC -->
+      <div class="pane" data-pane="offline" hidden>
+        <div class="card">
+          <h4>Use without signal</h4>
+          <p class="muted">Save the map, terrain and trails to this device.</p>
+          <button data-area="northshore" class="btn primary">Save whole North Shore</button>
+          <button data-area="view" class="btn">Save current view</button>
+          <label class="toggle"><input id="dl-sat" type="checkbox" /> Include satellite imagery</label>
+          <div id="dl-progress" class="progress" hidden><div class="bar"><span></span></div><p class="muted small"></p><button id="btn-dl-cancel" class="btn small">Cancel</button></div>
+          <p id="cache-status" class="muted small"></p>
+          <p id="trails-status" class="muted small"></p>
+          <details class="muted small"><summary>Manage storage</summary>
+            <button id="btn-trails" class="btn small">Refresh trail data</button>
+            <button id="btn-clear-cache" class="btn small danger">Delete saved map tiles</button>
+          </details>
+        </div>
+
+        <div class="card">
+          <h4>Sync routes between devices</h4>
+          <p id="sync-state" class="muted"></p>
+          <div id="sync-setup">
+            <p class="muted small">Routes are stored in <code id="sync-repo"></code> on GitHub. Anyone can view them there; saving needs a token, entered once on each device (and separately in the home-screen app on iPhone).</p>
+            <ol class="muted small steps">
+              <li><a id="token-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create a fine-grained token ↗</a></li>
+              <li>Repository access: <b>Only select repositories</b> → your trails repo</li>
+              <li>Permissions → Repository → <b>Contents: Read and write</b></li>
+              <li>Paste it here:</li>
+            </ol>
+            <div class="row-input"><input id="sync-token" type="password" placeholder="github_pat_…" autocomplete="off" /><button id="btn-token" class="btn">Connect</button></div>
+          </div>
+          <button id="btn-disconnect" class="btn small" hidden>Disconnect this device</button>
+        </div>
+
+        <div class="card">
+          <h4>Install on iPhone</h4>
+          <p class="muted">Open this page in Safari → Share → <b>Add to Home Screen</b>. Open it once while online so it works offline.</p>
+        </div>
+        <p class="fineprint">Map data © OpenStreetMap contributors (ODbL) via OpenFreeMap &amp; Overpass · Terrain: Mapzen/AWS Terrain Tiles · Satellite: Sentinel-2 cloudless by EOX (CC BY-NC-SA 4.0) · Hike info links: vancouvertrails.com.</p>
+      </div>
+    </div>
+  </section>
+
+  <div id="fly-bar" class="fly-bar" hidden>
+    <button id="fly-pause" class="btn" aria-label="Pause">❚❚</button>
+    <input id="fly-seek" type="range" min="0" max="1000" value="0" aria-label="Position" />
+    <select id="fly-speed" aria-label="Speed"><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+    <button id="fly-exit" class="btn" aria-label="Exit 3D preview">Exit</button>
+    <span id="fly-info" class="fly-info"></span>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

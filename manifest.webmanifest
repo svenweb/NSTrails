@@ -1,0 +1,16 @@
+{
+  "name": "North Shore Trails",
+  "short_name": "NS Trails",
+  "description": "Plan, preview in 3D, download and track runs and hikes on the North Shore mountains — offline.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1f3a2c",
+  "theme_color": "#1f3a2c",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
