@@ -1,5 +1,5 @@
 // Service worker: app shell offline + cache-first map tiles.
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL = `nst-shell-${VERSION}`;
 const TILES = 'nst-tiles-v1'; // shared with js/tiles.js
 const SHELL_FILES = [
@@ -27,7 +27,6 @@ const SHELL_FILES = [
   './js/flyover.js',
   './js/gpx.js',
   './js/sync.js',
-  './data/routes.json',
 ];
 const TILE_HOSTS = ['tiles.openfreemap.org', 's3.amazonaws.com', 'tiles.maps.eox.at'];
 

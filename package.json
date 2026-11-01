@@ -1,0 +1,10 @@
+{
+  "name": "nstrails",
+  "private": true,
+  "type": "module",
+  "description": "North Shore Trails PWA + tiny password-protected save API (Vercel functions + Vercel Blob)",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@vercel/blob": "^2.8.2"
+  }
+}

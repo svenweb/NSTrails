@@ -37,7 +37,7 @@ navigator.storage?.persist?.().catch(() => {});
 function updateNet() {
   $('#net-status').hidden = navigator.onLine;
 }
-addEventListener('online', () => { updateNet(); syncRoutes(); });
+addEventListener('online', () => { updateNet(); syncAll(); });
 addEventListener('offline', updateNet);
 updateNet();
 
@@ -515,7 +515,26 @@ function updateSaveStatus(msg) {
   else el.textContent = dirty ? 'Unsaved changes.' : 'Saved.';
 }
 
-const toRemote = (r) => ({ id: r.id, name: r.name, waypoints: r.waypoints.map((p) => [+p[0].toFixed(6), +p[1].toFixed(6)]), snap: r.snap, created: r.created, updated: r.updated, dist: Math.round(r.dist), gain: Math.round(r.gain), time: Math.round(r.time || 0) });
+const LOCAL_ONLY = ['synced', 'pendingDelete', 'needsPoints', '_refAlt'];
+const toRemote = (x) => {
+  const o = { ...x };
+  for (const k of LOCAL_ONLY) delete o[k];
+  if (o.waypoints) o.waypoints = o.waypoints.map((p) => [+p[0].toFixed(6), +p[1].toFixed(6)]);
+  return o;
+};
+
+// Push one item to the server if logged in. Returns true when it's on the server.
+async function pushItem(kind, item) {
+  if (!sync.isLoggedIn() || !navigator.onLine) return false;
+  try {
+    await sync.putItem(kind, toRemote(item));
+    await store.put(kind, item.id, { ...item, synced: true });
+    return true;
+  } catch (e) {
+    console.warn('push', e);
+    return false;
+  }
+}
 
 $('#btn-save').onclick = async () => {
   let name = routeNameVal();
@@ -528,43 +547,38 @@ $('#btn-save').onclick = async () => {
   const r = {
     id, name, waypoints, snap: snapOn(),
     created: prev?.created || Date.now(), updated: Date.now(),
-    dist: routeCum[routeCum.length - 1], gain: routeProfile?.gain || 0, time: routeProfile ? routeTime(routeProfile) : 0,
+    dist: Math.round(routeCum[routeCum.length - 1]), gain: Math.round(routeProfile?.gain || 0), time: Math.round(routeProfile ? routeTime(routeProfile) : 0),
     synced: false,
   };
   await store.put('routes', id, r);
   routeId = id;
   dirty = false;
   renderSavedRoutes();
-  if (sync.getToken() && navigator.onLine) {
-    updateSaveStatus('Saving to all your devices…');
-    try {
-      await sync.update((list) => [...list.filter((x) => x.id !== id), toRemote(r)], `Save route: ${name}`);
-      await store.put('routes', id, { ...r, synced: true });
-      updateSaveStatus('Saved · synced to your other devices.');
-      renderSavedRoutes();
-    } catch (e) {
-      updateSaveStatus(`Saved on this device. Sync failed: ${e.message}`);
-    }
+  if (sync.isLoggedIn()) {
+    updateSaveStatus('Saving…');
+    const ok = await pushItem('routes', r);
+    updateSaveStatus(ok ? 'Saved · available on all your devices.' : 'Saved on this device — will upload when you’re back online.');
+    renderSavedRoutes();
   } else {
-    updateSaveStatus(sync.getToken() ? 'Saved on this device — will sync when back online.' : 'Saved on this device. Set up sync (Offline tab) to see it on your other devices.');
+    updateSaveStatus('Saved on this device only. Log in (Routes tab) to see it on your other devices.');
   }
   toast('Route saved');
 };
 
+const localNote = (x) => (x.synced ? '' : ' · <span title="Not uploaded yet">this device only</span>');
+
 async function renderSavedRoutes() {
   const items = (await store.all('routes')).map((x) => x.value).filter((r) => !r.pendingDelete).sort((a, b) => (b.updated || b.created) - (a.updated || a.created));
   const ul = $('#saved-routes');
-  ul.innerHTML = items.length ? '' : '<li class="empty">No saved routes yet. Plan one and tap Save.</li>';
+  ul.innerHTML = items.length ? '' : `<li class="empty">${sync.isLoggedIn() ? 'No saved routes yet. Plan one and tap Save.' : 'No routes on this device. Log in to see shared routes.'}</li>`;
   for (const r of items) {
     const li = document.createElement('li');
-    li.innerHTML = `<div class="grow"><b>${esc(r.name)}</b><small>${fmtDist(r.dist)} · ↑${Math.round(r.gain || 0)} m${r.time ? ` · ${fmtDuration(r.time)}` : ''}${r.synced ? '' : ' · <span title="Only on this device">this device</span>'}</small></div>`;
+    li.innerHTML = `<div class="grow"><b>${esc(r.name)}</b><small>${fmtDist(r.dist)} · ↑${Math.round(r.gain || 0)} m${r.time ? ` · ${fmtDuration(r.time)}` : ''}${localNote(r)}</small></div>`;
     li.querySelector('.grow').onclick = () => openRoute(r);
-    li.append(
-      button('Open', () => openRoute(r)),
-      button('✕', () => deleteRoute(r), 'icon')
-    );
-    li.lastChild.title = 'Delete';
-    li.lastChild.setAttribute('aria-label', `Delete ${r.name}`);
+    const del = button('✕', () => deleteItem('routes', r), 'icon');
+    del.title = 'Delete';
+    del.setAttribute('aria-label', `Delete ${r.name}`);
+    li.append(button('Open', () => openRoute(r)), del);
     ul.appendChild(li);
   }
 }
@@ -582,95 +596,114 @@ async function openRoute(r) {
   updateSaveStatus();
   fitRoute();
 }
-async function deleteRoute(r) {
-  if (!confirm(`Delete “${r.name}”${r.synced ? ' from all your devices' : ''}?`)) return;
-  if (r.synced) {
-    if (sync.getToken() && navigator.onLine) {
-      try {
-        await sync.update((list) => list.filter((x) => x.id !== r.id), `Delete route: ${r.name}`);
-        await store.del('routes', r.id);
-      } catch (e) {
-        await store.put('routes', r.id, { ...r, pendingDelete: true });
-        toast(`Deleted here; will remove from other devices later (${e.message})`, 4000);
-      }
-    } else {
-      await store.put('routes', r.id, { ...r, pendingDelete: true });
+async function deleteItem(kind, x) {
+  const shared = x.synced && sync.isLoggedIn();
+  if (!confirm(`Delete “${x.name}”${shared ? ' for everyone' : ''}?`)) return;
+  if (x.synced) {
+    try {
+      if (!sync.isLoggedIn() || !navigator.onLine) throw new Error('offline');
+      await sync.deleteItem(kind, x.id);
+      await store.del(kind, x.id);
+    } catch {
+      await store.put(kind, x.id, { ...x, pendingDelete: true }); // finish when back online
     }
-  } else await store.del('routes', r.id);
-  if (routeId === r.id) { routeId = null; dirty = true; updateSaveStatus(); }
-  renderSavedRoutes();
+  } else await store.del(kind, x.id);
+  if (kind === 'routes' && routeId === x.id) { routeId = null; dirty = true; updateSaveStatus(); }
+  kind === 'routes' ? renderSavedRoutes() : renderSavedTracks();
 }
 
-// Merge routes from GitHub with this device; push anything pending.
+// Two-way sync with the server: pull everything, push local changes.
+async function syncKind(kind) {
+  const remote = await sync.listItems(kind);
+  const local = new Map((await store.all(kind)).map((x) => [x.key, x.value]));
+  const remoteIds = new Set(remote.map((r) => r.id));
+  const activeId = tracker.recording ? tracker.track?.id : null;
+  for (const r of remote) {
+    const l = local.get(r.id);
+    if (l?.pendingDelete) continue;
+    if (!l || (l.synced && (r.updated || 0) !== (l.updated || 0)) || (r.updated || 0) > (l.updated || 0)) {
+      const keepPoints = kind === 'tracks' && l?.points && (l.updated || 0) === (r.updated || 0);
+      await store.put(kind, r.id, { ...r, ...(keepPoints ? { points: l.points } : {}), synced: true, ...(kind === 'tracks' && !keepPoints ? { needsPoints: true } : {}) });
+    }
+  }
+  for (const l of local.values()) {
+    if (l.id === activeId) continue;
+    if (l.synced && !l.pendingDelete && !remoteIds.has(l.id)) await store.del(kind, l.id); // deleted elsewhere
+    else if (l.pendingDelete) {
+      await sync.deleteItem(kind, l.id).catch(() => {});
+      await store.del(kind, l.id);
+    } else if (!l.synced) {
+      await pushItem(kind, { ...l, updated: l.updated || Date.now() });
+    }
+  }
+}
 let syncing = false;
-async function syncRoutes() {
-  if (syncing || !navigator.onLine) return renderSyncLine();
+async function syncAll() {
+  renderAccount();
+  if (syncing || !navigator.onLine || !sync.isLoggedIn()) return;
   syncing = true;
-  $('#sync-line').textContent = 'Checking for routes from your other devices…';
+  $('#sync-line').textContent = 'Syncing…';
   try {
-    const remote = await sync.pull();
-    const local = new Map((await store.all('routes')).map((x) => [x.key, x.value]));
-    const remoteIds = new Set(remote.routes.map((r) => r.id));
-    for (const r of remote.routes) {
-      const l = local.get(r.id);
-      if (l?.pendingDelete) continue;
-      if (!l || l.synced || (r.updated || 0) >= (l.updated || 0)) await store.put('routes', r.id, { ...r, synced: true });
-    }
-    for (const l of local.values()) if (l.synced && !l.pendingDelete && !remoteIds.has(l.id) && remote.source === 'github') await store.del('routes', l.id);
-    const pending = [...local.values()].filter((l) => !l.synced || l.pendingDelete);
-    if (pending.length && sync.getToken()) {
-      await sync.update((list) => {
-        let out = list.filter((x) => !pending.some((p) => p.id === x.id));
-        for (const p of pending) if (!p.pendingDelete) out.push(toRemote(p));
-        return out;
-      }, `Sync ${pending.length} route change(s)`);
-      for (const p of pending) p.pendingDelete ? await store.del('routes', p.id) : await store.put('routes', p.id, { ...p, synced: true });
-    }
+    await syncKind('routes');
+    await syncKind('tracks');
     store.saveSetting('lastSync', Date.now());
   } catch (e) {
     console.warn('sync', e);
-    $('#sync-line').textContent = `Couldn't reach GitHub (${e.message}). Showing routes saved on this device.`;
+    if (e.status !== 401) $('#sync-line').textContent = `Couldn't sync (${e.message}). Showing what's on this device.`;
     syncing = false;
-    return renderSavedRoutes();
+    renderAccount();
+    return Promise.all([renderSavedRoutes(), renderSavedTracks()]);
   }
   syncing = false;
-  renderSyncLine();
+  renderAccount();
   renderSavedRoutes();
+  renderSavedTracks();
 }
-function renderSyncLine() {
+function renderAccount() {
+  const inn = sync.isLoggedIn();
   const last = store.setting('lastSync', 0);
-  const connected = !!sync.getToken();
-  $('#sync-line').textContent = connected
-    ? `Synced with your other devices${last ? ` · ${new Date(last).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}.`
-    : 'Viewing routes from GitHub. To save routes from this device to your other devices, connect sync in the Offline tab.';
-  $('#sync-state').textContent = connected ? `✓ This device is connected to ${sync.REPO.owner}/${sync.REPO.repo}.` : 'Not connected on this device.';
-  $('#sync-setup').hidden = connected;
-  $('#btn-disconnect').hidden = !connected;
+  $('#login-card').hidden = inn;
+  $('#btn-sync').hidden = !inn;
+  $('#btn-logout').hidden = !inn;
+  $('#account-state').textContent = inn ? '✓ Logged in on this device. Saved routes and tracks sync automatically.' : 'Not logged in. Routes and tracks are kept on this device only.';
+  if (!syncing)
+    $('#sync-line').textContent = inn
+      ? `Shared across your devices${last ? ` · synced ${new Date(last).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}.`
+      : '';
 }
-$('#sync-repo').textContent = `${sync.REPO.owner}/${sync.REPO.repo}`;
-$('#btn-sync').onclick = syncRoutes;
-$('#btn-token').onclick = async () => {
-  const t = $('#sync-token').value.trim();
-  if (!t) return toast('Paste your token first');
-  $('#btn-token').disabled = true;
+$('#btn-sync').onclick = syncAll;
+$('#login-card').onsubmit = async (e) => {
+  e.preventDefault();
+  const pw = $('#login-password').value;
+  if (!pw) return $('#login-password').focus();
+  $('#btn-login').disabled = true;
+  $('#login-error').hidden = true;
   try {
-    const res = await sync.checkToken(t);
-    if (!res.ok) return toast(res.msg, 5000);
-    sync.setToken(t);
-    $('#sync-token').value = '';
-    toast('Sync connected');
-    await syncRoutes();
-  } catch (e) {
-    toast(`Couldn't check token: ${e.message}`, 4000);
+    await sync.login(pw);
+    $('#login-password').value = '';
+    $('#login-password').blur();
+    toast('Logged in');
+    await syncAll();
+  } catch (err) {
+    $('#login-error').textContent = err.status === 401 ? 'That password isn’t right.' : `Couldn’t log in: ${navigator.onLine ? err.message : 'you’re offline'}.`;
+    $('#login-error').hidden = false;
   } finally {
-    $('#btn-token').disabled = false;
+    $('#btn-login').disabled = false;
   }
 };
-$('#btn-disconnect').onclick = () => {
-  if (!confirm('Disconnect sync on this device? Your routes stay on GitHub.')) return;
-  sync.setToken('');
-  renderSyncLine();
+$('#btn-logout').onclick = async () => {
+  if (!confirm('Log out on this device? Shared routes and tracks will be removed from this device (they stay on the server).')) return;
+  sync.logout();
+  for (const kind of ['routes', 'tracks'])
+    for (const { key, value } of await store.all(kind)) if (value.synced) await store.del(kind, key);
+  renderAccount();
+  renderSavedRoutes();
+  renderSavedTracks();
 };
+addEventListener('nst:logged-out', () => {
+  renderAccount();
+  toast('Please log in again', 3000);
+});
 
 // ================================================================ popular hikes
 const areas = ['All', ...new Set(HIKES.map((h) => h.area))];
@@ -852,7 +885,10 @@ $('#btn-pause').onclick = () => (tracker.paused ? tracker.resume() : tracker.pau
 $('#btn-stop').onclick = async () => {
   if (!confirm('Finish and save this track?')) return;
   const t = await tracker.stop();
-  toast(`Track saved · ${fmtDist(t.dist)}`);
+  t.updated = Date.now();
+  await store.put('tracks', t.id, t);
+  const ok = await pushItem('tracks', t);
+  toast(`Track saved${ok ? ' · on all your devices' : ''} · ${fmtDist(t.dist)}`);
   renderSavedTracks();
 };
 
@@ -877,28 +913,38 @@ function updateFollow() {
   chart.setMarker(near.along);
 }
 
+async function trackPoints(t) {
+  if (t.points?.length || !t.needsPoints) return t.points || [];
+  toast('Downloading track…', 1500);
+  const full = await sync.getItem('tracks', t.id);
+  const merged = { ...t, points: full.points || [], needsPoints: false, synced: true };
+  await store.put('tracks', t.id, merged);
+  return merged.points;
+}
 async function renderSavedTracks() {
-  const items = (await store.all('tracks')).filter((t) => !(tracker.recording && t.key === tracker.track?.id)).sort((a, b) => b.value.start - a.value.start);
+  const items = (await store.all('tracks')).map((x) => x.value).filter((t) => !t.pendingDelete && !(tracker.recording && t.id === tracker.track?.id)).sort((a, b) => b.start - a.start);
   const ul = $('#saved-tracks');
   ul.innerHTML = items.length ? '' : '<li class="empty">No tracks yet.</li>';
-  for (const { key, value: t } of items) {
+  for (const t of items) {
     const li = document.createElement('li');
-    li.innerHTML = `<div class="grow"><b>${esc(t.name)}</b><small>${new Date(t.start).toLocaleDateString()} · ${fmtDist(t.dist)} · ${fmtClock(t.movingTime)} · ↑${Math.round(t.gain)} m</small></div>`;
-    li.append(
-      button('Show', () => {
-        const coords = t.points.map((p) => [p.lng, p.lat]);
+    li.innerHTML = `<div class="grow"><b>${esc(t.name)}</b><small>${new Date(t.start).toLocaleDateString()} · ${fmtDist(t.dist)} · ${fmtClock(t.movingTime)} · ↑${Math.round(t.gain)} m${localNote(t)}</small></div>`;
+    const show = async () => {
+      try {
+        const coords = (await trackPoints(t)).map((p) => [p.lng, p.lat]);
         map.getSource('track').setData(geo(coords));
         if (coords.length > 1) {
           const b = bboxOf(coords);
           map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 60, maxZoom: 16 });
         }
-      }),
-      button('GPX', () => downloadFile(`${t.name.replace(/[^\w-]+/g, '_')}.gpx`, trackToGpx(t.name, t.points))),
-      button('✕', async () => {
-        if (!confirm(`Delete “${t.name}”?`)) return;
-        await store.del('tracks', key);
-        renderSavedTracks();
-      }, 'icon')
+      } catch (e) {
+        toast(`Couldn’t load track: ${e.message}`);
+      }
+    };
+    li.querySelector('.grow').onclick = show;
+    li.append(
+      button('Show', show),
+      button('GPX', async () => downloadFile(`${t.name.replace(/[^\w-]+/g, '_')}.gpx`, trackToGpx(t.name, await trackPoints(t)))),
+      button('✕', () => deleteItem('tracks', t), 'icon')
     );
     ul.appendChild(li);
   }
@@ -1020,9 +1066,8 @@ $('#btn-clear-cache').onclick = async () => {
 showPlanEdit();
 recompute();
 renderHikes();
-renderSyncLine();
-renderSavedRoutes().then(syncRoutes);
-renderSavedTracks();
+renderAccount();
+Promise.all([renderSavedRoutes(), renderSavedTracks()]).then(syncAll);
 loadNetwork().then((net) => (net ? useNetwork(net) : navigator.onLine && downloadTrails()));
 if (await tracker.resumeActive()) {
   toast('Unfinished recording found — tap Resume to continue', 5000);

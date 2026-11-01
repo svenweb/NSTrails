@@ -230,3 +230,5 @@ details summary { cursor: pointer; margin-top: 6px; }
 .toolbar .tool { flex: 1 1 auto; white-space: nowrap; padding: 7px 8px; }
 .toolbar #btn-more { flex: 0 0 auto; }
 .substats.bare .sep { display: none; }
+.login { border: 1px solid var(--line); }
+.error { color: var(--danger); margin: 6px 0 0; }

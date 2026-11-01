@@ -134,7 +134,16 @@
 
       <!-- ROUTES -->
       <div class="pane" data-pane="routes" hidden>
-        <div class="section-head"><h4>My routes</h4><button id="btn-sync" class="linklike small" title="Check for routes saved on other devices">↻ Refresh</button></div>
+        <form id="login-card" class="card login" hidden>
+          <h4>Log in to see saved routes &amp; tracks</h4>
+          <p class="muted small">Enter the shared password once on this device. Then anything you save shows up on all your devices.</p>
+          <div class="row-input">
+            <input id="login-password" type="password" placeholder="Password" autocomplete="current-password" enterkeyhint="go" aria-label="Password" />
+            <button id="btn-login" class="btn primary" type="submit">Log in</button>
+          </div>
+          <p id="login-error" class="error small" role="alert" hidden></p>
+        </form>
+        <div class="section-head"><h4>Saved routes</h4><button id="btn-sync" class="linklike small" title="Check for routes saved on other devices">↻ Refresh</button></div>
         <p id="sync-line" class="muted small"></p>
         <ul id="saved-routes" class="list"></ul>
         <h4>Popular North Shore hikes</h4>
@@ -189,19 +198,9 @@
         </div>
 
         <div class="card">
-          <h4>Sync routes between devices</h4>
-          <p id="sync-state" class="muted"></p>
-          <div id="sync-setup">
-            <p class="muted small">Routes are stored in <code id="sync-repo"></code> on GitHub. Anyone can view them there; saving needs a token, entered once on each device (and separately in the home-screen app on iPhone).</p>
-            <ol class="muted small steps">
-              <li><a id="token-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create a fine-grained token ↗</a></li>
-              <li>Repository access: <b>Only select repositories</b> → your trails repo</li>
-              <li>Permissions → Repository → <b>Contents: Read and write</b></li>
-              <li>Paste it here:</li>
-            </ol>
-            <div class="row-input"><input id="sync-token" type="password" placeholder="github_pat_…" autocomplete="off" /><button id="btn-token" class="btn">Connect</button></div>
-          </div>
-          <button id="btn-disconnect" class="btn small" hidden>Disconnect this device</button>
+          <h4>Account</h4>
+          <p id="account-state" class="muted"></p>
+          <button id="btn-logout" class="btn small" hidden>Log out on this device</button>
         </div>
 
         <div class="card">
